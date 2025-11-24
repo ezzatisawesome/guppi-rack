@@ -1,0 +1,56 @@
+# Rig configuration file
+# Customize for your setup
+
+rig:
+  id: "rig1"  # Unique identifier for this rig (required for multi-rig deployments)
+  name: "Production Test Rack"
+  description: "Main power supply telemetry rack"
+  
+  # Global telemetry settings
+  telemetry:
+    measurement_interval: 1.0  # seconds between measurements
+    enabled: true
+  
+  # Instrument definitions
+  instruments:
+    - id: psu1
+      name: "BK9130 Power Supply"
+      type: BK9130
+      enabled: true
+      connection:
+        type: VISA
+        address: "USB0::0xFFFF::0x9130::802360043766810027::INSTR"
+        timeout: 10.0
+      signals:
+        - channel: 1
+          voltage:
+            enabled: true
+          current:
+            enabled: true
+        - channel: 2
+          voltage:
+            enabled: true
+          current:
+            enabled: true
+        - channel: 3
+          voltage:
+            enabled: true
+          current:
+            enabled: false  # Not measuring current on channel 3
+    
+    - id: psu2
+      name: "BK9200 Power Supply"
+      type: BK9200
+      enabled: true
+      num_channels: 1  # Required for BK9200
+      connection:
+        type: VISA
+        address: "USB0::0xFFFF::0x9200::802204020757710095::INSTR"
+        timeout: 10.0
+      signals:
+        - channel: 1
+          voltage:
+            enabled: true
+          current:
+            enabled: true
+
