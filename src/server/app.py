@@ -1,12 +1,16 @@
 """FastAPI application for instrument control and telemetry management."""
 
 import logging
+import os
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Optional
+from pathlib import Path
+from typing import Any, AsyncGenerator, Optional
 
+import yaml
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+from server.endpoints import register_manual_endpoints
 from telemetry import TelemetryManager
 
 logger = logging.getLogger(__name__)
@@ -92,6 +96,32 @@ def create_app(
     # Store connection pool in app state for reference
     app.state.db_connection_pool = db_connection_pool
     
+    # Initialize instrument registry in app state
+    app.state.instruments: dict[str, dict[str, Any]] = {}
+    instruments_list = rig_config.get("instruments", [])
+    for inst in instruments_list:
+        instrument_id = inst.get("id")
+        if instrument_id:
+            app.state.instruments[instrument_id] = inst
+    
+    # Load raw YAML config for rig info (name, description, etc.)
+    # Use same logic as rig_config_loader
+    config_path = os.getenv("RIG_CONFIG_PATH", "rig_config.yml")
+    if not os.path.isabs(config_path):
+        # If relative path, look in current directory (project root when running from main.py)
+        config_file = Path(config_path)
+    else:
+        config_file = Path(config_path)
+    
+    raw_rig_config = {}
+    if config_file.exists():
+        with open(config_file, "r") as f:
+            raw_config = yaml.safe_load(f)
+            raw_rig_config = raw_config.get("rig", {})
+    
+    # Store raw rig config in app state
+    app.state.raw_rig_config = raw_rig_config
+    
     @app.get("/")
     async def root():
         """Root endpoint."""
@@ -160,6 +190,81 @@ def create_app(
         
         telemetry_manager.stop()
         return {"message": "Telemetry stopped"}
+    
+    # Rig information endpoint
+    @app.get("/rig")
+    async def get_rig_info():
+        """Get rig information including all instruments."""
+        raw_config = app.state.raw_rig_config
+        instruments_list = rig_config.get("instruments", [])
+        
+        # Build API instrument list
+        api_instruments = []
+        for inst in instruments_list:
+            instrument_id = inst.get("id")
+            if not instrument_id:
+                continue
+            
+            # Extract channels from signals
+            channels = sorted(set(
+                signal.channel for signal in inst.get("signals", [])
+            ))
+            
+            # Get connection info from raw config
+            connection_info = None
+            raw_inst_config = None
+            raw_instruments = raw_config.get("instruments", [])
+            for raw_inst in raw_instruments:
+                if raw_inst.get("id") == instrument_id:
+                    raw_inst_config = raw_inst
+                    conn_config = raw_inst.get("connection", {})
+                    connection_info = {
+                        "type": conn_config.get("type", ""),
+                        "address": conn_config.get("address", ""),
+                        "timeout": conn_config.get("timeout", 10.0),
+                        "connected": inst.get("driver") is not None,
+                    }
+                    break
+            
+            # Try to get identification from driver
+            identification = None
+            driver = inst.get("driver")
+            if driver:
+                try:
+                    identification = driver.identify()
+                except Exception:
+                    pass
+            
+            api_instruments.append({
+                "id": instrument_id,
+                "name": inst.get("name", ""),
+                "type": raw_inst_config.get("type", "") if raw_inst_config else "",
+                "enabled": raw_inst_config.get("enabled", True) if raw_inst_config else True,
+                "channels": channels,
+                "num_channels": raw_inst_config.get("num_channels") if raw_inst_config else None,
+                "connection": connection_info or {
+                    "type": "",
+                    "address": "",
+                    "timeout": 10.0,
+                    "connected": False,
+                },
+                "identification": identification,
+            })
+        
+        return {
+            "id": rig_config.get("rig_id", raw_config.get("id", "")),
+            "name": raw_config.get("name"),
+            "description": raw_config.get("description"),
+            "telemetry": {
+                "measurement_interval": rig_config.get("telemetry", {}).get("measurement_interval"),
+                "enabled": rig_config.get("telemetry", {}).get("enabled"),
+            },
+            "instruments": api_instruments,
+            "total_instruments": len(api_instruments),
+        }
+    
+    # Register manual control endpoints
+    register_manual_endpoints(app, rig_config)
     
     return app
 
