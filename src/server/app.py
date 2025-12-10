@@ -8,6 +8,7 @@ from typing import Any, AsyncGenerator, Optional
 
 import yaml
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from server.endpoints import register_manual_endpoints
@@ -91,6 +92,15 @@ def create_app(
         description="API for instrument control and telemetry",
         version="1.0.0",
         lifespan=lifespan,
+    )
+    
+    # Configure CORS
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # Allows all origins
+        allow_credentials=True,
+        allow_methods=["*"],  # Allows all methods
+        allow_headers=["*"],  # Allows all headers
     )
     
     # Store connection pool in app state for reference
