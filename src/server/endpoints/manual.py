@@ -4,10 +4,17 @@ import logging
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Path
+from pydantic import BaseModel
 
 from ..models import SetCurrentRequest, SetOutputRequest, SetVoltageRequest
 
 logger = logging.getLogger(__name__)
+
+
+class ManualModeRequest(BaseModel):
+    """Request model for setting manual mode."""
+
+    enabled: bool
 
 
 def register_manual_endpoints(app: FastAPI, rig_config: dict):
@@ -17,16 +24,46 @@ def register_manual_endpoints(app: FastAPI, rig_config: dict):
         app: FastAPI application instance.
         rig_config: Rig configuration dict containing instruments.
     """
+    # Manual mode endpoints
+    @app.get("/manual/mode")
+    async def get_manual_mode():
+        """Get current manual mode state used for telemetry saving."""
+        policy = getattr(app.state, "data_save_policy", None)
+        if policy is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Data save policy not initialized",
+            )
+        return {"manual_mode": bool(getattr(policy, "manual_mode", False))}
+
+    @app.post("/manual/mode")
+    async def set_manual_mode(request: ManualModeRequest):
+        """Set manual mode state used for telemetry saving."""
+        policy = getattr(app.state, "data_save_policy", None)
+        if policy is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Data save policy not initialized",
+            )
+        policy.manual_mode = request.enabled
+        logger.info("Manual mode set to %s", policy.manual_mode)
+        return {"manual_mode": policy.manual_mode}
+
     # Discovery endpoints
     @app.get("/manual")
     async def list_instruments():
         """List all configured instruments."""
         instruments_list = []
         for inst_id, inst_config in app.state.instruments.items():
-            # Extract unique channels from signals
-            channels = set()
-            for signal in inst_config.get("signals", []):
-                channels.add(signal.channel)
+            # Extract channels from driver
+            driver = inst_config.get("driver")
+            if driver and hasattr(driver, "num_channels"):
+                channels = list(range(1, driver.num_channels + 1))
+            else:
+                # Fallback: extract from signals if driver not available
+                channels = sorted(set(
+                    signal.channel for signal in inst_config.get("signals", [])
+                ))
             
             instruments_list.append({
                 "id": inst_id,
@@ -43,15 +80,20 @@ def register_manual_endpoints(app: FastAPI, rig_config: dict):
         
         inst_config = app.state.instruments[instrument_id]
         
-        # Extract unique channels from signals
-        channels = set()
-        for signal in inst_config.get("signals", []):
-            channels.add(signal.channel)
+        # Extract channels from driver
+        driver = inst_config.get("driver")
+        if driver and hasattr(driver, "num_channels"):
+            channels = list(range(1, driver.num_channels + 1))
+        else:
+            # Fallback: extract from signals if driver not available
+            channels = sorted(set(
+                signal.channel for signal in inst_config.get("signals", [])
+            ))
         
         return {
             "id": instrument_id,
             "name": inst_config.get("name"),
-            "channels": sorted(list(channels)),
+            "channels": channels,
         }
     
     @app.get("/manual/{instrument_id}/channels")
@@ -62,14 +104,19 @@ def register_manual_endpoints(app: FastAPI, rig_config: dict):
         
         inst_config = app.state.instruments[instrument_id]
         
-        # Extract unique channels from signals
-        channels = set()
-        for signal in inst_config.get("signals", []):
-            channels.add(signal.channel)
+        # Extract channels from driver
+        driver = inst_config.get("driver")
+        if driver and hasattr(driver, "num_channels"):
+            channels = list(range(1, driver.num_channels + 1))
+        else:
+            # Fallback: extract from signals if driver not available
+            channels = sorted(set(
+                signal.channel for signal in inst_config.get("signals", [])
+            ))
         
         return {
             "instrument_id": instrument_id,
-            "channels": sorted(list(channels)),
+            "channels": channels,
         }
     
     # Control endpoints
@@ -161,15 +208,17 @@ def _validate_instrument_channel(app: FastAPI, instrument_id: str, channel_id: i
     inst_config = app.state.instruments[instrument_id]
     driver = inst_config["driver"]
     
-    # Validate channel exists in signals
-    channels = set()
-    for signal in inst_config.get("signals", []):
-        channels.add(signal.channel)
+    # Validate channel exists in driver
+    if not hasattr(driver, "num_channels"):
+        raise HTTPException(
+            status_code=500,
+            detail=f"Driver for instrument '{instrument_id}' does not have num_channels attribute"
+        )
     
-    if channel_id not in channels:
+    if channel_id < 1 or channel_id > driver.num_channels:
         raise HTTPException(
             status_code=404,
-            detail=f"Channel {channel_id} not found for instrument '{instrument_id}'. Available channels: {sorted(list(channels))}"
+            detail=f"Channel {channel_id} not found for instrument '{instrument_id}'. Available channels: {list(range(1, driver.num_channels + 1))}"
         )
     
     return driver, inst_config
@@ -320,7 +369,18 @@ async def _handle_set_output(
     """Handle set_output request."""
     try:
         driver, _ = _validate_instrument_channel(app, instrument_id, channel_id)
-        driver.set_output(channel_id, request.enabled)
+        # Check if driver is an ELoad (has set_load) or PSU (has set_output)
+        if hasattr(driver, "set_load"):
+            # Electronic load
+            driver.set_load(channel_id, request.enabled)
+        elif hasattr(driver, "set_output"):
+            # Power supply
+            driver.set_output(channel_id, request.enabled)
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Driver for instrument '{instrument_id}' does not support output/load control"
+            )
         return {
             "instrument_id": instrument_id,
             "channel": channel_id,
@@ -342,7 +402,18 @@ async def _handle_get_output(
     """Handle get_output request."""
     try:
         driver, _ = _validate_instrument_channel(app, instrument_id, channel_id)
-        enabled = driver.get_output(channel_id)
+        # Check if driver is an ELoad (has get_load) or PSU (has get_output)
+        if hasattr(driver, "get_load"):
+            # Electronic load
+            enabled = driver.get_load(channel_id)
+        elif hasattr(driver, "get_output"):
+            # Power supply
+            enabled = driver.get_output(channel_id)
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Driver for instrument '{instrument_id}' does not support output/load query"
+            )
         return {
             "instrument_id": instrument_id,
             "channel": channel_id,

@@ -1,20 +1,12 @@
-"""Main entry point for running the FastAPI server."""
-
 import logging
 import sys
-from pathlib import Path
-
 import uvicorn
-
-# Add src directory to path to allow absolute imports
-src_dir = Path(__file__).parent.parent
-if str(src_dir) not in sys.path:
-    sys.path.insert(0, str(src_dir))
 
 from server.rig import load_rig_config
 from instruments import INSTRUMENT_DRIVERS
 from server.app import create_app
 from server.config import get_db_connection_pool
+
 
 # Configure logging
 logging.basicConfig(
@@ -26,6 +18,23 @@ logger = logging.getLogger(__name__)
 
 def main():
     """Main entry point for the server."""
+
+    # Load rig configuration from YAML
+    try:
+        rig_config = load_rig_config(instrument_drivers=INSTRUMENT_DRIVERS)
+        logger.info("Rig configuration loaded successfully")
+    except FileNotFoundError as e:
+        logger.error(f"Rig configuration file not found: {e}")
+        logger.error("Please create rig_config.yml (see rig_config.yml.example)")
+        sys.exit(1)
+    except ValueError as e:
+        logger.error(f"Invalid rig configuration: {e}")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Failed to load rig configuration: {e}", exc_info=True)
+        sys.exit(1)
+
+
     # Setup database connection pool
     try:
         db_connection_pool = get_db_connection_pool(
@@ -56,20 +65,7 @@ def main():
         logger.error("Unexpected error occurred. Please check your configuration.")
         sys.exit(1)
     
-    # Load rig configuration from YAML
-    try:
-        rig_config = load_rig_config(instrument_drivers=INSTRUMENT_DRIVERS)
-        logger.info("Rig configuration loaded successfully")
-    except FileNotFoundError as e:
-        logger.error(f"Rig configuration file not found: {e}")
-        logger.error("Please create rig_config.yml (see rig_config.yml.example)")
-        sys.exit(1)
-    except ValueError as e:
-        logger.error(f"Invalid rig configuration: {e}")
-        sys.exit(1)
-    except Exception as e:
-        logger.error(f"Failed to load rig configuration: {e}", exc_info=True)
-        sys.exit(1)
+
     
     # Get telemetry settings from config (with defaults)
     telemetry_config = rig_config.get("telemetry", {})

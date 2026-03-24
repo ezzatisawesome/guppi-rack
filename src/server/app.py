@@ -12,12 +12,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from server.endpoints import register_manual_endpoints
+from server.endpoints.tests import register_test_endpoints
+from sequencer import TestExecutor
 from telemetry import TelemetryManager
 
 logger = logging.getLogger(__name__)
 
+class DataSavePolicy:
+    """Holds shared state for controlling when telemetry data should be saved."""
+
+    def __init__(self) -> None:
+        self.manual_mode: bool = False
+        self.test_executor: Optional[TestExecutor] = None
+
+
 # Global telemetry manager instance
 telemetry_manager: Optional[TelemetryManager] = None
+
+# Global test executor instance
+test_executor: Optional[TestExecutor] = None
 
 
 def create_app(
@@ -44,11 +57,14 @@ def create_app(
     Returns:
         Configured FastAPI application.
     """
-    
+
+    # Shared policy used to decide when telemetry measurements should be saved
+    save_policy = DataSavePolicy()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         """Lifespan context manager for startup and shutdown events."""
-        global telemetry_manager
+        global telemetry_manager, test_executor
         
         # Startup
         logger.info("Starting application...")
@@ -62,10 +78,36 @@ def create_app(
             queue_maxsize=queue_maxsize,
             queue_behavior=queue_behavior,
             table_name=table_name,
+            get_should_save_data=lambda: (
+                save_policy.manual_mode
+                or (
+                    save_policy.test_executor is not None
+                    and save_policy.test_executor.is_executing()
+                )
+            ),
+            get_test_id=lambda: (
+                (save_policy.test_executor.get_current_execution() or {}).get("execution_id")
+                if save_policy.test_executor is not None
+                and save_policy.test_executor.is_executing()
+                else None
+            ),
         )
         
         # Start telemetry collection
         telemetry_manager.start()
+        
+        # Initialize test executor
+        test_executor = TestExecutor(
+            rig_config=rig_config,
+            db_connection_pool=db_connection_pool,
+        )
+        save_policy.test_executor = test_executor
+
+        # Store executor and policy in app state and update global in endpoints module
+        app.state.test_executor = test_executor
+        app.state.data_save_policy = save_policy
+        from server.endpoints import tests as tests_module
+        tests_module.test_executor = test_executor
         
         logger.info("Application started")
         
@@ -77,6 +119,9 @@ def create_app(
         if telemetry_manager is not None:
             telemetry_manager.stop()
             telemetry_manager = None
+        
+        # Test executor cleanup (if needed)
+        test_executor = None
         
         # Close database connection pool
         try:
@@ -105,6 +150,9 @@ def create_app(
     
     # Store connection pool in app state for reference
     app.state.db_connection_pool = db_connection_pool
+    
+    # Register test execution endpoints (executor will be set in app.state during lifespan)
+    register_test_endpoints(app, None)  # Executor will be available via app.state
     
     # Initialize instrument registry in app state
     app.state.instruments: dict[str, dict[str, Any]] = {}
@@ -215,10 +263,15 @@ def create_app(
             if not instrument_id:
                 continue
             
-            # Extract channels from signals
-            channels = sorted(set(
-                signal.channel for signal in inst.get("signals", [])
-            ))
+            # Extract channels from driver
+            driver = inst.get("driver")
+            if driver and hasattr(driver, "num_channels"):
+                channels = list(range(1, driver.num_channels + 1))
+            else:
+                # Fallback: extract from signals if driver not available
+                channels = sorted(set(
+                    signal.channel for signal in inst.get("signals", [])
+                ))
             
             # Get connection info from raw config
             connection_info = None
@@ -275,6 +328,10 @@ def create_app(
     
     # Register manual control endpoints
     register_manual_endpoints(app, rig_config)
+    
+    # Initialize test executor (will be set in lifespan, but router registration happens here)
+    # The executor will be available when endpoints are called
+    test_executor_instance = None
     
     return app
 

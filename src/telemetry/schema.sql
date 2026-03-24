@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS telemetry (
     channel INTEGER NOT NULL,
     value DOUBLE PRECISION NOT NULL,
     unit TEXT NOT NULL,
+    execution_id TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -21,6 +22,7 @@ CREATE INDEX IF NOT EXISTS idx_telemetry_instrument_id ON telemetry(instrument_i
 CREATE INDEX IF NOT EXISTS idx_telemetry_signal_type ON telemetry(signal_type);
 CREATE INDEX IF NOT EXISTS idx_telemetry_rig_instrument ON telemetry(rig_id, instrument_id);
 CREATE INDEX IF NOT EXISTS idx_telemetry_instrument_signal ON telemetry(instrument_id, signal_type, channel);
+CREATE INDEX IF NOT EXISTS idx_telemetry_execution_id ON telemetry(execution_id);
 
 -- Optional: Enable Row Level Security (RLS) if needed
 -- ALTER TABLE telemetry ENABLE ROW LEVEL SECURITY;

@@ -1,7 +1,8 @@
 """Main entry point for power supply control examples."""
 
-from devices.core.connection import create_connection, ConnectionType
-from devices.psu import BK9130, BK9200
+from instruments.core.connection import create_connection, ConnectionType
+from instruments.psu import BK9130, BK9200
+from instruments.eload import Chroma63600, LoadMode
 
 
 def test_bk9130():
@@ -149,9 +150,103 @@ def test_bk9200():
         print("\nDone!")
 
 
+def test_chroma63600():
+    """Example usage of Chroma63600 electronic load."""
+    # Create a VISA USB TMC connection
+    # Replace with your actual instrument address
+    address = "USB0::0x0A69::0x083E::636002003228::INSTR"  # Update with your device address
+    
+    # Create connection
+    connection = create_connection(
+        connection_type=ConnectionType.VISA,
+        address=address,
+        timeout=10.0
+    )
+    
+    # Channel limits for 63640-80-80 modules: 80V, 80A, 640W per module
+    channel_limits = [
+        {"voltage_max": 80.0, "current_max": 80.0, "power_max": 640.0, "resistance_min": 0.0},
+        {"voltage_max": 80.0, "current_max": 80.0, "power_max": 640.0, "resistance_min": 0.0}
+    ]
+    
+    # Use the Chroma63600 electronic load with context manager
+    num_channels = 2  # 63600-2 mainframe with 2 modules
+    with Chroma63600(connection, num_channels=num_channels, channel_limits=channel_limits) as eload:
+        # Identify the instrument
+        print(f"Instrument ID: {eload.identify()}")
+        
+        # Test Channel 1 - Constant Current (CC) mode
+        print("\n=== Testing Channel 1 (CC Mode) ===")
+        eload.set_mode(1, LoadMode.CC)
+        print(f"Channel 1 - Mode: {eload.get_mode(1).value}")
+        
+        eload.set_current(1, 1.0)  # Set to 1A
+        print(f"Channel 1 - Current setting: {eload.get_current(1)}A")
+        
+        # Test Channel 2 - Constant Voltage (CV) mode
+        print("\n=== Testing Channel 2 (CV Mode) ===")
+        eload.set_mode(2, LoadMode.CV)
+        print(f"Channel 2 - Mode: {eload.get_mode(2).value}")
+        
+        eload.set_voltage(2, 5.0)  # Set to 5V
+        print(f"Channel 2 - Voltage setting: {eload.get_voltage(2)}V")
+        
+        # Test Constant Resistance (CR) mode on Channel 1
+        print("\n=== Testing Channel 1 (CR Mode) ===")
+        eload.set_mode(1, LoadMode.CR)
+        print(f"Channel 1 - Mode: {eload.get_mode(1).value}")
+        
+        eload.set_resistance(1, 10.0)  # Set to 10 ohms
+        print(f"Channel 1 - Resistance setting: {eload.get_resistance(1)}Ω")
+        
+        # Test Constant Power (CP) mode on Channel 2
+        print("\n=== Testing Channel 2 (CP Mode) ===")
+        eload.set_mode(2, LoadMode.CP)
+        print(f"Channel 2 - Mode: {eload.get_mode(2).value}")
+        
+        eload.set_power(2, 50.0)  # Set to 50W
+        print(f"Channel 2 - Power setting: {eload.get_power(2)}W")
+        
+        # Enable loads
+        print("\n=== Enabling Loads ===")
+        eload.set_load(1, True)
+        eload.set_load(2, True)
+        print(f"Channel 1 - Load state: {'ON' if eload.get_load(1) else 'OFF'}")
+        print(f"Channel 2 - Load state: {'ON' if eload.get_load(2) else 'OFF'}")
+        
+        # Wait a moment for measurements to stabilize
+        import time
+        time.sleep(2)
+        
+        # Measure actual values
+        print("\n=== Measured Values ===")
+        for ch in range(1, num_channels + 1):
+            voltage = eload.measure_voltage(ch)
+            current = eload.measure_current(ch)
+            power = eload.measure_power(ch)
+            mode = eload.get_mode(ch)
+            load_state = eload.get_load(ch)
+            print(f"Channel {ch} ({mode.value}):")
+            print(f"  Voltage: {voltage:.3f}V")
+            print(f"  Current: {current:.3f}A")
+            print(f"  Power: {power:.3f}W")
+            print(f"  Load: {'ON' if load_state else 'OFF'}")
+        
+        # Disable loads before exiting
+        print("\n=== Disabling Loads ===")
+        eload.set_load(1, False)
+        eload.set_load(2, False)
+        print(f"Channel 1 - Load state: {'ON' if eload.get_load(1) else 'OFF'}")
+        print(f"Channel 2 - Load state: {'ON' if eload.get_load(2) else 'OFF'}")
+        
+        print("\nDone!")
+
+
 def main():
-    test_bk9200()
-    test_bk9130()
+    # Uncomment the test you want to run
+    # test_bk9200()
+    # test_bk9130()
+    test_chroma63600()
 
 
 if __name__ == "__main__":

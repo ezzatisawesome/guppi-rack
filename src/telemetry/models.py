@@ -36,6 +36,8 @@ class Measurement:
         channel: Channel number.
         value: The measured value.
         unit: Unit of measurement (e.g., 'V', 'A').
+        execution_id: Optional[str]: Optional identifier of the test execution
+            this measurement is associated with (if collected during a test).
     """
     recorded_at: datetime
     rig_id: str
@@ -45,6 +47,7 @@ class Measurement:
     channel: int
     value: float
     unit: str
+    execution_id: Optional[str] = None
     
     def to_dict(self) -> dict[str, Any]:
         """Convert measurement to dictionary for database insertion."""
@@ -57,5 +60,6 @@ class Measurement:
             "channel": self.channel,
             "value": self.value,
             "unit": self.unit,
+            "execution_id": self.execution_id,
         }
 

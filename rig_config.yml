@@ -4,11 +4,11 @@
 rig:
   id: "rig1"  # Unique identifier for this rig (required for multi-rig deployments)
   name: "Production Test Rack"
-  description: "Main power supply telemetry rack"
+  description: "Diddy's test rack"
   
   # Global telemetry settings
   telemetry:
-    measurement_interval: 1.0  # seconds between measurements
+    measurement_interval: 0.1  # seconds between measurements
     enabled: true
   
   # Instrument definitions
@@ -21,22 +21,6 @@ rig:
         type: VISA
         address: "USB0::0xFFFF::0x9130::802360043766810027::INSTR"
         timeout: 10.0
-      signals:
-        - channel: 1
-          voltage:
-            enabled: true
-          current:
-            enabled: true
-        - channel: 2
-          voltage:
-            enabled: true
-          current:
-            enabled: true
-        - channel: 3
-          voltage:
-            enabled: true
-          current:
-            enabled: false  # Not measuring current on channel 3
     
     - id: psu2
       name: "BK9200 Power Supply"
@@ -47,10 +31,24 @@ rig:
         type: VISA
         address: "USB0::0xFFFF::0x9200::802204020757710095::INSTR"
         timeout: 10.0
-      signals:
-        - channel: 1
-          voltage:
-            enabled: true
-          current:
-            enabled: true
+
+    - id: eload1
+      name: "Chroma 63600-2 Electronic Load"
+      type: Chroma63600
+      enabled: false
+      num_channels: 2  # 63600-2 mainframe with 2 modules
+      # Channel limits for 63640-80-80 modules: 80V, 80A, 640W per module
+      channel_limits:
+        - voltage_max: 80.0    # Maximum voltage for module 1
+          current_max: 80.0    # Maximum current for module 1
+          power_max: 640.0     # Maximum power for module 1 (80V * 8A typical)
+          resistance_min: 0.0  # Minimum resistance
+        - voltage_max: 80.0    # Maximum voltage for module 2
+          current_max: 80.0    # Maximum current for module 2
+          power_max: 640.0     # Maximum power for module 2
+          resistance_min: 0.0  # Minimum resistance
+      connection:
+        type: VISA
+        address: "USB0::0x0A69::0x083E::636002003228::INSTR"  # Update with your device address
+        timeout: 10.0
 

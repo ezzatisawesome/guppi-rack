@@ -5,7 +5,7 @@ import threading
 import time
 from datetime import datetime
 from queue import Empty, Full, Queue
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .models import Measurement, SignalConfig
 
@@ -29,6 +29,8 @@ class TelemetryManager:
         queue_maxsize: int = 10000,
         queue_behavior: str = "drop_oldest",
         table_name: str = "telemetry",
+        get_should_save_data: Optional[Callable[[], bool]] = None,
+        get_test_id: Optional[Callable[[], Optional[str]]] = None,
     ):
         """
         Initialize telemetry manager.
@@ -57,6 +59,8 @@ class TelemetryManager:
         self.batch_size = batch_size
         self.queue_maxsize = queue_maxsize
         self.queue_behavior = queue_behavior
+        self._get_should_save_data = get_should_save_data
+        self._get_test_id = get_test_id
         
         # Bounded queue for measurements
         self.queue: Queue[Measurement] = Queue(maxsize=queue_maxsize)
@@ -72,6 +76,26 @@ class TelemetryManager:
         self._measurements_dropped = 0
         self._upload_errors = 0
         self._stats_lock = threading.Lock()
+
+    def _should_save_data(self) -> bool:
+        """Determine whether measurements should currently be saved."""
+        if self._get_should_save_data is None:
+            return True
+        try:
+            return bool(self._get_should_save_data())
+        except Exception as e:
+            logger.error(f"Error evaluating should_save_data: {e}", exc_info=True)
+            return False
+
+    def _current_test_id(self) -> Optional[str]:
+        """Get the current test execution id, if any."""
+        if self._get_test_id is None:
+            return None
+        try:
+            return self._get_test_id()
+        except Exception as e:
+            logger.error(f"Error getting current test id: {e}", exc_info=True)
+            return None
     
     def start(self):
         """Start the measurement and uploader threads."""
@@ -114,16 +138,15 @@ class TelemetryManager:
         self._stop_event.set()
         
         # Wait for threads to finish
-        if self._measurement_thread.is_alive():
+        if self._measurement_thread is not None and self._measurement_thread.is_alive():
             self._measurement_thread.join(timeout=timeout / 2)
-        if self._uploader_thread.is_alive():
+            if self._measurement_thread.is_alive():
+                logger.warning("Measurement thread did not stop in time (likely blocked on instrument read)")
+        
+        if self._uploader_thread is not None and self._uploader_thread.is_alive():
             self._uploader_thread.join(timeout=timeout / 2)
-        
-        # Upload any remaining measurements
-        self._flush_queue()
-        
-        # Note: Connection pool cleanup should be handled by the application
-        # that created it, not here
+            if self._uploader_thread.is_alive():
+                logger.warning("Uploader thread did not stop in time")
         
         logger.info("Telemetry manager stopped")
     
@@ -148,6 +171,7 @@ class TelemetryManager:
         while not self._stop_event.is_set():
             try:
                 dt = datetime.now()
+                execution_id = self._current_test_id()
                 
                 # Measure all configured signals
                 for instrument_config in instruments:
@@ -172,6 +196,7 @@ class TelemetryManager:
                                 channel=signal_config.channel,
                                 value=value,
                                 unit=unit,
+                                execution_id=execution_id,
                             )
                             
                             # Enqueue measurement
@@ -183,6 +208,40 @@ class TelemetryManager:
                                 f"on {instrument_name} channel {signal_config.channel}: {e}",
                                 exc_info=True
                             )
+
+                # Also record meta telemetry for test status as dedicated channels
+                is_running_value = 1.0 if execution_id is not None else 0.0
+                meta_instrument_id = "system"
+                meta_instrument_name = "System"
+
+                # Channel indicating whether a test is currently running (1.0 or 0.0)
+                test_running_measurement = Measurement(
+                    recorded_at=dt,
+                    rig_id=rig_id,
+                    instrument_id=meta_instrument_id,
+                    instrument_name=meta_instrument_name,
+                    signal_type="test_running",
+                    channel=0,
+                    value=is_running_value,
+                    unit="bool",
+                    execution_id=execution_id,
+                )
+                self._enqueue_measurement(test_running_measurement)
+
+                # Channel carrying the test id via the execution_id column; only when a test is running
+                if execution_id is not None:
+                    test_id_measurement = Measurement(
+                        recorded_at=dt,
+                        rig_id=rig_id,
+                        instrument_id=meta_instrument_id,
+                        instrument_name=meta_instrument_name,
+                        signal_type="test_id",
+                        channel=0,
+                        value=0.0,
+                        unit="id",
+                        execution_id=execution_id,
+                    )
+                    self._enqueue_measurement(test_id_measurement)
                 
                 # Sleep until next measurement interval
                 self._stop_event.wait(self.measurement_interval)
@@ -326,8 +385,8 @@ class TelemetryManager:
                 # Prepare batch insert query
                 insert_query = f"""
                     INSERT INTO {self.table_name} 
-                    (recorded_at, rig_id, instrument_id, instrument_name, signal_type, channel, value, unit)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    (recorded_at, rig_id, instrument_id, instrument_name, signal_type, channel, value, unit, execution_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 
                 # Convert measurements to tuples for batch insert
@@ -341,6 +400,7 @@ class TelemetryManager:
                         m.channel,
                         m.value,
                         m.unit,
+                        m.execution_id,
                     )
                     for m in batch
                 ]
