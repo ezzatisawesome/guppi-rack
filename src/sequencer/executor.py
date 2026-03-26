@@ -73,6 +73,9 @@ class TestExecutor:
             driver = inst_config.get("driver")
             
             if not instrument_id or not driver:
+                logger.warning(
+                    "Skipping instrument with missing 'id' or 'driver': %s", inst_config
+                )
                 continue
             
             # Create plug instance
@@ -90,7 +93,7 @@ class TestExecutor:
             
             # Use instrument_id as the variable name (e.g., PSU1, PSU2)
             bound_plugs[instrument_id.upper()] = plug_factory
-            logger.debug(f"Created plug factory for {instrument_id} -> {instrument_id.upper()}")
+            logger.debug("Created plug factory for %s -> %s", instrument_id, instrument_id.upper())
         
         return bound_plugs
 
@@ -242,6 +245,11 @@ class TestExecutor:
         """
         # Check if already executing
         if not self._execution_lock.acquire(blocking=False):
+            logger.warning(
+                "[rig=%s] Rejected test execution — another test is already running (%s)",
+                self.rig_id,
+                self._current_execution.get("execution_id") if self._current_execution else "unknown",
+            )
             return {
                 "execution_id": None,
                 "status": "error",
@@ -253,6 +261,10 @@ class TestExecutor:
         try:
             # Save execution start
             if not self.save_execution_start(execution_id, dut_serial):
+                logger.error(
+                    "[exec=%s] Aborting — failed to persist execution start to database",
+                    execution_id,
+                )
                 return {
                     "execution_id": execution_id,
                     "status": "error",
@@ -310,8 +322,8 @@ class TestExecutor:
             # Extract TEST_PHASES from namespace
             test_phases = namespace.get("TEST_PHASES")
             if not test_phases:
-                error_msg = "TEST_PHASES not found in script"
-                logger.error(error_msg)
+                error_msg = "TEST_PHASES not defined in script — script must assign a list of phase functions to TEST_PHASES"
+                logger.error("[exec=%s] %s", execution_id, error_msg)
                 self.save_execution_end(
                     execution_id,
                     "error",
@@ -322,6 +334,13 @@ class TestExecutor:
                     "status": "error",
                     "error": error_msg,
                 }
+            
+            logger.info(
+                "[exec=%s] TEST_PHASES extracted: %d phase(s) — %s",
+                execution_id,
+                len(test_phases),
+                [getattr(p, "__name__", repr(p)) for p in test_phases],
+            )
             
             # Create OpenHTF test
             test = htf.Test(*test_phases)
@@ -336,7 +355,11 @@ class TestExecutor:
             test.add_output_callbacks(capture_result)
             
             # Execute test
-            logger.info(f"Executing test {execution_id}")
+            logger.info(
+                "[exec=%s] Starting OpenHTF test execution (rig=%s, dut=%s, plugs=%s)",
+                execution_id, self.rig_id, dut_serial or "<none>",
+                list(self._bound_plugs.keys()),
+            )
             test_passed = test.execute(test_start=lambda: dut_serial or execution_id)
             
             # Determine status
@@ -344,6 +367,11 @@ class TestExecutor:
                 status = "pass"
             else:
                 status = "fail"
+            
+            logger.info(
+                "[exec=%s] Test completed with status=%s (rig=%s, dut=%s)",
+                execution_id, status.upper(), self.rig_id, dut_serial or "<none>",
+            )
             
             # Convert test record to JSON-serializable dict
             result_dict = self._test_record_to_dict(test_record_result) if test_record_result else {}
@@ -357,12 +385,16 @@ class TestExecutor:
             }
             
         except Exception as e:
-            error_msg = f"Error executing test: {e}"
-            logger.error(error_msg, exc_info=True)
+            error_msg = f"Unhandled exception during test execution: {type(e).__name__}: {e}"
+            logger.error(
+                "[exec=%s] %s (rig=%s, dut=%s)",
+                execution_id, error_msg, self.rig_id, dut_serial or "<none>",
+                exc_info=True,
+            )
             self.save_execution_end(
                 execution_id,
                 "error",
-                {"error": error_msg, "exception": str(e)},
+                {"error": error_msg, "exception": str(e), "exception_type": type(e).__name__},
             )
             return {
                 "execution_id": execution_id,
@@ -371,6 +403,7 @@ class TestExecutor:
             }
         finally:
             self._current_execution = None
+            logger.debug("[exec=%s] Execution lock released", execution_id)
             self._execution_lock.release()
 
     def _test_record_to_dict(self, record: test_record.TestRecord) -> dict[str, Any]:
