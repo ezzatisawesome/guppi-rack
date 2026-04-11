@@ -348,28 +348,13 @@ def create_app(
             if not instrument_id:
                 continue
             
-            driver = inst.get("driver")
             signals = inst.get("signals", [])
             
             for signal in signals:
-                # Build flat path from signal config
-                path = f"{instrument_id}.ch{signal.channel}.{signal.signal_type}"
-                
-                # Determine unit from signal type
-                if signal.signal_type == "voltage":
-                    data_type = "float"
-                    unit = "V"
-                elif signal.signal_type == "current":
-                    data_type = "float"
-                    unit = "A"
-                else:
-                    data_type = "float"
-                    unit = ""
-                
                 paths.append({
-                    "path": path,
-                    "type": data_type,
-                    "unit": unit,
+                    "path": signal.path,
+                    "type": "float",
+                    "unit": signal.unit,
                 })
         
         # Add system meta paths

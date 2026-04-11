@@ -195,8 +195,10 @@ def _create_instrument(
                 rig_id=rig_id,
                 instrument_id=instrument_id,
                 instrument_name=instrument_name,
+                path=f"{instrument_id}.ch{channel}.voltage",
                 signal_type="voltage",
                 channel=channel,
+                unit="V",
             )
         )
         # Add current signal
@@ -205,8 +207,10 @@ def _create_instrument(
                 rig_id=rig_id,
                 instrument_id=instrument_id,
                 instrument_name=instrument_name,
+                path=f"{instrument_id}.ch{channel}.current",
                 signal_type="current",
                 channel=channel,
+                unit="A",
             )
         )
     

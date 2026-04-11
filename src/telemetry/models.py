@@ -21,6 +21,7 @@ class SignalConfig:
         path: Flat path string for this signal (e.g. "psu1.voltage", "psu1.current").
         signal_type: Original signal type used by the driver (e.g. 'voltage', 'current').
         channel: Channel number (1-based), used by the driver to read the correct channel.
+        unit: Engineering unit for this signal (e.g. "V", "A", "Ω", "s", "W").
     """
     rig_id: str
     instrument_id: str
@@ -28,6 +29,7 @@ class SignalConfig:
     path: str
     signal_type: str  # Still needed internally to call the correct driver method
     channel: int      # Still needed internally for driver.measure_voltage(channel)
+    unit: str
 
 
 @dataclass

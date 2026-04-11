@@ -186,8 +186,7 @@ class TelemetryManager:
                             value = self._read_signal(driver, signal_config)
                             
                             # Create measurement object with flat path
-                            # Phase 23 (D-10): Use the signal config's flat path
-                            unit = "V" if signal_config.signal_type == "voltage" else "A"
+                            # Phase 23 (D-10): Use the signal config's flat path and unit
                             measurement = Measurement(
                                 recorded_at=dt,
                                 rig_id=rig_id,
@@ -195,7 +194,7 @@ class TelemetryManager:
                                 instrument_name=instrument_name,
                                 path=signal_config.path,
                                 value=value,
-                                unit=unit,
+                                unit=signal_config.unit,
                                 execution_id=execution_id,
                             )
                             
