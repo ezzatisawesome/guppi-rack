@@ -185,15 +185,15 @@ class TelemetryManager:
                             # Read measurement from instrument
                             value = self._read_signal(driver, signal_config)
                             
-                            # Create measurement object
+                            # Create measurement object with flat path
+                            # Phase 23 (D-10): Use the signal config's flat path
                             unit = "V" if signal_config.signal_type == "voltage" else "A"
                             measurement = Measurement(
                                 recorded_at=dt,
                                 rig_id=rig_id,
                                 instrument_id=instrument_id,
                                 instrument_name=instrument_name,
-                                signal_type=signal_config.signal_type,
-                                channel=signal_config.channel,
+                                path=signal_config.path,
                                 value=value,
                                 unit=unit,
                                 execution_id=execution_id,
@@ -220,8 +220,7 @@ class TelemetryManager:
                     rig_id=rig_id,
                     instrument_id=meta_instrument_id,
                     instrument_name=meta_instrument_name,
-                    signal_type="test_running",
-                    channel=0,
+                    path="system.test_running",
                     value=is_running_value,
                     unit="bool",
                     execution_id=execution_id,
@@ -235,8 +234,7 @@ class TelemetryManager:
                         rig_id=rig_id,
                         instrument_id=meta_instrument_id,
                         instrument_name=meta_instrument_name,
-                        signal_type="test_id",
-                        channel=0,
+                        path="system.test_id",
                         value=0.0,
                         unit="id",
                         execution_id=execution_id,
@@ -383,10 +381,11 @@ class TelemetryManager:
                 cursor = connection.cursor()
                 
                 # Prepare batch insert query
+                # Phase 23 (D-10): Use flat path column instead of signal_type/channel
                 insert_query = f"""
                     INSERT INTO {self.table_name} 
-                    (recorded_at, rig_id, instrument_id, instrument_name, signal_type, channel, value, unit, execution_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (recorded_at, rig_id, instrument_id, instrument_name, path, value, unit, execution_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 
                 # Convert measurements to tuples for batch insert
@@ -396,8 +395,7 @@ class TelemetryManager:
                         m.rig_id,
                         m.instrument_id,
                         m.instrument_name,
-                        m.signal_type,
-                        m.channel,
+                        m.path,
                         m.value,
                         m.unit,
                         m.execution_id,

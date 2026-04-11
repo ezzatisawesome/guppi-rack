@@ -1,5 +1,5 @@
 -- SQL schema for telemetry table in Supabase Postgres
--- Run this in your Supabase SQL editor to create the table
+-- Phase 23 (D-10): Flat-path architecture — replaces legacy signal_type/channel columns
 
 CREATE TABLE IF NOT EXISTS telemetry (
     id BIGSERIAL PRIMARY KEY,
@@ -7,8 +7,7 @@ CREATE TABLE IF NOT EXISTS telemetry (
     rig_id TEXT NOT NULL,
     instrument_id TEXT NOT NULL,
     instrument_name TEXT NOT NULL,
-    signal_type TEXT NOT NULL,
-    channel INTEGER NOT NULL,
+    path TEXT NOT NULL,
     value DOUBLE PRECISION NOT NULL,
     unit TEXT NOT NULL,
     execution_id TEXT,
@@ -19,9 +18,9 @@ CREATE TABLE IF NOT EXISTS telemetry (
 CREATE INDEX IF NOT EXISTS idx_telemetry_recorded_at ON telemetry(recorded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_telemetry_rig_id ON telemetry(rig_id);
 CREATE INDEX IF NOT EXISTS idx_telemetry_instrument_id ON telemetry(instrument_id);
-CREATE INDEX IF NOT EXISTS idx_telemetry_signal_type ON telemetry(signal_type);
+CREATE INDEX IF NOT EXISTS idx_telemetry_path ON telemetry(path);
 CREATE INDEX IF NOT EXISTS idx_telemetry_rig_instrument ON telemetry(rig_id, instrument_id);
-CREATE INDEX IF NOT EXISTS idx_telemetry_instrument_signal ON telemetry(instrument_id, signal_type, channel);
+CREATE INDEX IF NOT EXISTS idx_telemetry_rig_path ON telemetry(rig_id, path);
 CREATE INDEX IF NOT EXISTS idx_telemetry_execution_id ON telemetry(execution_id);
 
 -- Optional: Enable Row Level Security (RLS) if needed
@@ -32,4 +31,3 @@ CREATE INDEX IF NOT EXISTS idx_telemetry_execution_id ON telemetry(execution_id)
 --     ON telemetry FOR SELECT
 --     TO authenticated
 --     USING (true);
-

@@ -8,21 +8,27 @@ from pydantic import BaseModel
 
 class ScriptResponse(BaseModel):
     """Response model for GET /tests/script."""
-    
+
     code: str
-    updated_at: Optional[datetime] = None
+    script_path: str
 
 
 class ExecuteTestRequest(BaseModel):
-    """Request model for POST /tests/execute."""
-    
+    """Request model for POST /tests/execute.
+
+    Provide *either* ``code`` (inline script) or ``script_path``
+    (Supabase Storage path, e.g. ``projects/<id>/scripts/test.py``).
+    If both are provided, ``code`` takes precedence.
+    """
+
     code: Optional[str] = None
+    script_path: Optional[str] = None
     dut_serial: Optional[str] = None
 
 
 class ExecuteTestResponse(BaseModel):
     """Response model for POST /tests/execute."""
-    
+
     execution_id: str
     status: str
     error: Optional[str] = None

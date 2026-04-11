@@ -2,10 +2,10 @@
 
 import logging
 import threading
+import time
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from sequencer import TestExecutor
 
@@ -26,83 +26,83 @@ test_executor: Optional[TestExecutor] = None
 
 def register_test_endpoints(app, executor: TestExecutor):
     """Register test execution endpoints with the FastAPI app.
-    
+
     Args:
         app: FastAPI application instance.
         executor: TestExecutor instance.
     """
     global test_executor
     test_executor = executor
-    
+
     app.include_router(router)
 
 
 @router.get("/script", response_model=ScriptResponse)
-async def get_script():
-    """Fetch the current stored test script from Supabase."""
+async def get_script(
+    script_path: str = Query(
+        ...,
+        description="Supabase Storage path, e.g. 'projects/<id>/scripts/test.py'",
+    ),
+):
+    """Fetch a test script from Supabase Storage by path."""
     if test_executor is None:
         raise HTTPException(
-            status_code=503,
-            detail="Test executor not initialized"
+            status_code=503, detail="Test executor not initialized"
         )
-    
-    try:
-        script_code = test_executor.fetch_script_from_db()
-        
-        if script_code is None:
-            raise HTTPException(
-                status_code=404,
-                detail="No test script found in database"
-            )
-        
-        # Note: updated_at would need to be fetched from DB if needed
-        return ScriptResponse(code=script_code)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching script: {e}", exc_info=True)
+
+    script_code = test_executor.fetch_script_from_storage(script_path)
+
+    if script_code is None:
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch script: {str(e)}"
+            status_code=404,
+            detail=f"Script not found in storage: {script_path}",
         )
+
+    return ScriptResponse(code=script_code, script_path=script_path)
 
 
 @router.post("/execute", response_model=ExecuteTestResponse)
-async def execute_test(
-    request: ExecuteTestRequest,
-    background_tasks: BackgroundTasks,
-):
+async def execute_test(request: ExecuteTestRequest):
     """Execute a test script.
-    
-    If `code` is provided, uses it directly. Otherwise, fetches script from Supabase.
+
+    If ``code`` is provided, uses it directly.
+    Otherwise, fetches the script from Supabase Storage using ``script_path``.
+    At least one of ``code`` or ``script_path`` must be provided.
     """
     if test_executor is None:
         raise HTTPException(
-            status_code=503,
-            detail="Test executor not initialized"
+            status_code=503, detail="Test executor not initialized"
         )
-    
+
     # Check if already executing
     if test_executor.is_executing():
         current = test_executor.get_current_execution()
         return ExecuteTestResponse(
-            execution_id=current.get("execution_id", "unknown") if current else "unknown",
+            execution_id=(
+                current.get("execution_id", "unknown") if current else "unknown"
+            ),
             status="error",
             error="Another test is currently running",
         )
-    
-    # Get script code
+
+    # Resolve script code
     script_code = request.code
     if not script_code:
-        # Fetch from database
-        script_code = test_executor.fetch_script_from_db()
+        if not request.script_path:
+            raise HTTPException(
+                status_code=400,
+                detail="Either 'code' or 'script_path' must be provided",
+            )
+
+        script_code = test_executor.fetch_script_from_storage(
+            request.script_path
+        )
         if script_code is None:
             raise HTTPException(
                 status_code=404,
-                detail="No test script found in database and no inline code provided"
+                detail=f"Script not found in storage: {request.script_path}",
             )
-    
+
     # Execute in background thread
     def run_test():
         try:
@@ -110,17 +110,16 @@ async def execute_test(
                 script_code=script_code,
                 dut_serial=request.dut_serial,
             )
-            logger.info(f"Test execution completed: {result}")
+            logger.info("Test execution completed: %s", result)
         except Exception as e:
-            logger.error(f"Error in background test execution: {e}", exc_info=True)
-    
-    # Start execution in background
-    import threading
+            logger.error(
+                "Error in background test execution: %s", e, exc_info=True
+            )
+
     thread = threading.Thread(target=run_test, daemon=True)
     thread.start()
-    
+
     # Wait briefly for execution to start and get execution_id
-    import time
     for _ in range(20):  # Try up to 2 seconds
         if test_executor.is_executing():
             current = test_executor.get_current_execution()
@@ -130,7 +129,7 @@ async def execute_test(
                     status=current["status"],
                 )
         time.sleep(0.1)
-    
+
     # If we get here, execution didn't start properly
     return ExecuteTestResponse(
         execution_id="unknown",
@@ -144,13 +143,16 @@ async def get_test_status(request: Request):
     """Check if a test is currently running."""
     if test_executor is None:
         raise HTTPException(
-            status_code=503,
-            detail="Test executor not initialized",
+            status_code=503, detail="Test executor not initialized"
         )
 
     # Read manual mode from shared save policy if available
     policy = getattr(request.app.state, "data_save_policy", None)
-    manual_mode = bool(getattr(policy, "manual_mode", False)) if policy is not None else None
+    manual_mode = (
+        bool(getattr(policy, "manual_mode", False))
+        if policy is not None
+        else None
+    )
 
     if test_executor.is_executing():
         current = test_executor.get_current_execution() or {}

@@ -329,6 +329,55 @@ def create_app(
     # Register manual control endpoints
     register_manual_endpoints(app, rig_config)
     
+    # ── Rig Manifest (Phase 23, D-07, D-11) ──────────────────────────
+    # Returns all addressable instrument paths from the boot configuration.
+    # Used by the frontend widget editor for auto-complete dropdowns.
+    
+    @app.get("/manifest")
+    async def get_manifest():
+        """Get the rig manifest — all addressable instrument paths and their types.
+        
+        Phase 23 (D-11): Statically reflects the instrument capabilities 
+        defined in the boot configuration file. No real-time hardware pinging.
+        """
+        instruments_list = rig_config.get("instruments", [])
+        paths = []
+        
+        for inst in instruments_list:
+            instrument_id = inst.get("id")
+            if not instrument_id:
+                continue
+            
+            driver = inst.get("driver")
+            signals = inst.get("signals", [])
+            
+            for signal in signals:
+                # Build flat path from signal config
+                path = f"{instrument_id}.ch{signal.channel}.{signal.signal_type}"
+                
+                # Determine unit from signal type
+                if signal.signal_type == "voltage":
+                    data_type = "float"
+                    unit = "V"
+                elif signal.signal_type == "current":
+                    data_type = "float"
+                    unit = "A"
+                else:
+                    data_type = "float"
+                    unit = ""
+                
+                paths.append({
+                    "path": path,
+                    "type": data_type,
+                    "unit": unit,
+                })
+        
+        # Add system meta paths
+        paths.append({"path": "system.test_running", "type": "bool", "unit": "bool"})
+        paths.append({"path": "system.test_id", "type": "string", "unit": "id"})
+        
+        return {"paths": paths}
+    
     # Initialize test executor (will be set in lifespan, but router registration happens here)
     # The executor will be available when endpoints are called
     test_executor_instance = None
