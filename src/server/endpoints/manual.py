@@ -231,6 +231,7 @@ async def _handle_set_voltage(
     request: SetVoltageRequest,
 ) -> dict:
     """Handle set_voltage request."""
+    logger.info(f"Received Command: SET_VOLTAGE | Instrument: {instrument_id} | Channel: {channel_id} | Voltage: {request.voltage}V")
     if request.voltage < 0:
         raise HTTPException(status_code=400, detail="Voltage must be non-negative")
     
@@ -278,6 +279,7 @@ async def _handle_set_current(
     request: SetCurrentRequest,
 ) -> dict:
     """Handle set_current request."""
+    logger.info(f"Received Command: SET_CURRENT | Instrument: {instrument_id} | Channel: {channel_id} | Current: {request.current}A")
     if request.current < 0:
         raise HTTPException(status_code=400, detail="Current must be non-negative")
     
@@ -367,6 +369,7 @@ async def _handle_set_output(
     request: SetOutputRequest,
 ) -> dict:
     """Handle set_output request."""
+    logger.info(f"Received Command: SET_OUTPUT | Instrument: {instrument_id} | Channel: {channel_id} | Enabled: {request.enabled}")
     try:
         driver, _ = _validate_instrument_channel(app, instrument_id, channel_id)
         # Check if driver is an ELoad (has set_load) or PSU (has set_output)
