@@ -7,6 +7,8 @@ from datetime import datetime
 from queue import Empty, Full, Queue
 from typing import Any, Callable, Optional
 
+from psycopg2.extras import execute_values
+
 from .models import Measurement, SignalConfig
 
 logger = logging.getLogger(__name__)
@@ -175,6 +177,7 @@ class TelemetryManager:
             try:
                 dt = datetime.now()
                 execution_id = self._current_test_id()
+                save_data = self._should_save_data()
                 
                 # Measure all configured signals
                 for instrument_config in instruments:
@@ -188,28 +191,31 @@ class TelemetryManager:
                             # Read measurement from instrument
                             value = self._read_signal(driver, signal_config)
                             
-                            # Create measurement object with flat path
-                            # Phase 23 (D-10): Use the signal config's flat path and unit
-                            measurement = Measurement(
-                                recorded_at=dt,
-                                rig_id=rig_id,
-                                instrument_id=instrument_id,
-                                instrument_name=instrument_name,
-                                path=signal_config.path,
-                                value=value,
-                                unit=signal_config.unit,
-                                execution_id=execution_id,
-                            )
-                            
-                            # Enqueue measurement
-                            self._enqueue_measurement(measurement)
+                            # Only enqueue if we should be saving data
+                            if save_data:
+                                # Create measurement object with flat path
+                                # Phase 23 (D-10): Use the signal config's flat path and unit
+                                measurement = Measurement(
+                                    recorded_at=dt,
+                                    rig_id=rig_id,
+                                    instrument_id=instrument_id,
+                                    instrument_name=instrument_name,
+                                    path=signal_config.path,
+                                    value=value,
+                                    unit=signal_config.unit,
+                                    execution_id=execution_id,
+                                )
+                                
+                                # Enqueue measurement
+                                self._enqueue_measurement(measurement)
                             
                             # Print to terminal for debugging
                             if signal_config.signal_type in ["voltage", "current"]:
                                 current_time = time.time()
                                 key = f"{instrument_name}_{signal_config.channel}_{signal_config.signal_type}"
                                 if current_time - self._last_print_time.get(key, 0) >= 1.0:
-                                    print(f"[{dt.strftime('%H:%M:%S')}] {instrument_name} Ch {signal_config.channel} {signal_config.signal_type.capitalize()}: {value:.3f} {signal_config.unit}")
+                                    save_tag = " [SAVING]" if save_data else ""
+                                    print(f"[{dt.strftime('%H:%M:%S')}] {instrument_name} Ch {signal_config.channel} {signal_config.signal_type.capitalize()}: {value:.3f} {signal_config.unit}{save_tag}")
                                     self._last_print_time[key] = current_time
                             
                             
@@ -221,36 +227,37 @@ class TelemetryManager:
                             )
 
                 # Also record meta telemetry for test status as dedicated channels
-                is_running_value = 1.0 if execution_id is not None else 0.0
-                meta_instrument_id = "system"
-                meta_instrument_name = "System"
+                if save_data:
+                    is_running_value = 1.0 if execution_id is not None else 0.0
+                    meta_instrument_id = "system"
+                    meta_instrument_name = "System"
 
-                # Channel indicating whether a test is currently running (1.0 or 0.0)
-                test_running_measurement = Measurement(
-                    recorded_at=dt,
-                    rig_id=rig_id,
-                    instrument_id=meta_instrument_id,
-                    instrument_name=meta_instrument_name,
-                    path="system.test_running",
-                    value=is_running_value,
-                    unit="bool",
-                    execution_id=execution_id,
-                )
-                self._enqueue_measurement(test_running_measurement)
-
-                # Channel carrying the test id via the execution_id column; only when a test is running
-                if execution_id is not None:
-                    test_id_measurement = Measurement(
+                    # Channel indicating whether a test is currently running (1.0 or 0.0)
+                    test_running_measurement = Measurement(
                         recorded_at=dt,
                         rig_id=rig_id,
                         instrument_id=meta_instrument_id,
                         instrument_name=meta_instrument_name,
-                        path="system.test_id",
-                        value=0.0,
-                        unit="id",
+                        path="system.test_running",
+                        value=is_running_value,
+                        unit="bool",
                         execution_id=execution_id,
                     )
-                    self._enqueue_measurement(test_id_measurement)
+                    self._enqueue_measurement(test_running_measurement)
+
+                    # Channel carrying the test id via the execution_id column; only when a test is running
+                    if execution_id is not None:
+                        test_id_measurement = Measurement(
+                            recorded_at=dt,
+                            rig_id=rig_id,
+                            instrument_id=meta_instrument_id,
+                            instrument_name=meta_instrument_name,
+                            path="system.test_id",
+                            value=0.0,
+                            unit="id",
+                            execution_id=execution_id,
+                        )
+                        self._enqueue_measurement(test_id_measurement)
                 
                 # Sleep until next measurement interval
                 self._stop_event.wait(self.measurement_interval)
@@ -393,15 +400,16 @@ class TelemetryManager:
             cursor = None
             try:
                 # Get connection from pool
+                t_start = time.time()
                 connection = self.db_connection_pool.getconn()
                 cursor = connection.cursor()
                 
-                # Prepare batch insert query
+                # Prepare batch insert query using execute_values for bulk INSERT
                 # Phase 23 (D-10): Use flat path column instead of signal_type/channel
                 insert_query = f"""
                     INSERT INTO {self.table_name} 
                     (recorded_at, rig_id, instrument_id, instrument_name, path, value, unit, execution_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES %s
                 """
                 
                 # Convert measurements to tuples for batch insert
@@ -419,15 +427,18 @@ class TelemetryManager:
                     for m in batch
                 ]
                 
-                # Execute batch insert
-                cursor.executemany(insert_query, records)
+                # execute_values sends a single INSERT with all rows — 
+                # dramatically faster than executemany which sends N round-trips
+                execute_values(cursor, insert_query, records, page_size=len(records))
                 connection.commit()
+                
+                elapsed_ms = (time.time() - t_start) * 1000
                 
                 # Success
                 with self._stats_lock:
                     self._measurements_uploaded += len(batch)
                 
-                logger.debug(f"Uploaded batch of {len(batch)} measurements")
+                logger.info(f"Uploaded {len(batch)} measurements in {elapsed_ms:.0f}ms (queue: {self.queue.qsize()})")
                 
                 # Clean up
                 if cursor:
