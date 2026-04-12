@@ -76,8 +76,8 @@ def main():
         rig_config=rig_config,
         db_connection_pool=db_connection_pool,
         measurement_interval=measurement_interval,
-        batch_size=10,  # Upload in batches of 10 to reduce latency
-        queue_maxsize=10000,  # Max 10000 measurements in queue
+        batch_size=100,  # Larger batches are more efficient for Postgres
+        queue_maxsize=500,  # Max 500 measurements caps maximum latency if DB is slow
         queue_behavior="drop_oldest",  # Drop oldest when queue is full
         table_name="telemetry",  # Database table name
     )

@@ -345,18 +345,23 @@ class TelemetryManager:
         while not self._stop_event.is_set():
             try:
                 # Try to get a measurement (with timeout to allow checking stop event)
+                # Wait up to 0.5s for an item
                 try:
-                    measurement = self.queue.get(timeout=1.0)
+                    measurement = self.queue.get(timeout=0.5)
                     batch.append(measurement)
                 except Empty:
-                    # Timeout - check if we should flush batch
-                    if batch:
-                        self._upload_batch(batch)
-                        batch = []
-                    continue
+                    pass
                 
-                # Upload batch when it reaches the target size
-                if len(batch) >= self.batch_size:
+                # Quickly drain any other items already in the queue, up to batch_size
+                while len(batch) < self.batch_size:
+                    try:
+                        measurement = self.queue.get_nowait()
+                        batch.append(measurement)
+                    except Empty:
+                        break
+                
+                # Upload whatever we collected
+                if batch:
                     self._upload_batch(batch)
                     batch = []
                     
