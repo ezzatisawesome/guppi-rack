@@ -157,6 +157,9 @@ class TelemetryManager:
         """
         logger.info("Measurement thread started")
         
+        # Dictionary to track last print time for throttling terminal output
+        self._last_print_time = {}
+        
         instruments = self.rig_config.get("instruments", [])
         rig_id = self.rig_config.get("rig_id")
         
@@ -200,6 +203,15 @@ class TelemetryManager:
                             
                             # Enqueue measurement
                             self._enqueue_measurement(measurement)
+                            
+                            # Print to terminal for debugging
+                            if signal_config.signal_type in ["voltage", "current"]:
+                                current_time = time.time()
+                                key = f"{instrument_name}_{signal_config.channel}_{signal_config.signal_type}"
+                                if current_time - self._last_print_time.get(key, 0) >= 1.0:
+                                    print(f"[{dt.strftime('%H:%M:%S')}] {instrument_name} Ch {signal_config.channel} {signal_config.signal_type.capitalize()}: {value:.3f} {signal_config.unit}")
+                                    self._last_print_time[key] = current_time
+                            
                             
                         except Exception as e:
                             logger.error(
