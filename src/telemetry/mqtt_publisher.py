@@ -42,9 +42,9 @@ class MqttPublisher:
             client_id=client_id,
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         )
-        
-        # Authentication
-        self._client.username_pw_set(self.config.username, self.config.password)
+
+        # Authentication (disabled)
+        # self._client.username_pw_set(self.config.username, self.config.password)
         
         # Last Will & Testament — published automatically if we disconnect unexpectedly
         status_topic = self._topic("status", self.rig_id, "online")
