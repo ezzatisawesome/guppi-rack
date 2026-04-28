@@ -4,7 +4,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Dict, Optional
 
 import yaml
 from fastapi import FastAPI
@@ -13,8 +13,10 @@ from fastapi.responses import JSONResponse
 
 from server.endpoints import register_manual_endpoints
 from server.endpoints.tests import register_test_endpoints
+from server.mqtt_config import MqttConfig
 from sequencer import TestExecutor
 from telemetry import TelemetryManager
+from telemetry.mqtt_publisher import MqttPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +39,6 @@ def create_app(
     rig_config: dict,
     db_connection_pool,
     measurement_interval: float = 1.0,
-    batch_size: int = 100,
-    queue_maxsize: int = 10000,
-    queue_behavior: str = "drop_oldest",
-    table_name: str = "telemetry",
 ) -> FastAPI:
     """
     Create and configure FastAPI application.
@@ -48,11 +46,8 @@ def create_app(
     Args:
         rig_config: Configuration dict containing instrument definitions.
         db_connection_pool: PostgreSQL connection pool (psycopg2.pool.ThreadedConnectionPool).
+            Still required for TestExecutor; NOT used for telemetry.
         measurement_interval: Time between measurements in seconds.
-        batch_size: Number of measurements to batch before uploading.
-        queue_maxsize: Maximum size of the measurement queue.
-        queue_behavior: Behavior when queue is full ('drop_oldest', 'drop_new', 'block').
-        table_name: Name of the database table (default: 'telemetry').
     
     Returns:
         Configured FastAPI application.
@@ -69,28 +64,33 @@ def create_app(
         # Startup
         logger.info("Starting application...")
         
-        # Initialize telemetry manager
+        # Initialize MQTT publisher for real-time telemetry streaming
+        rig_id = rig_config.get("rig_id", "")
+        mqtt_publisher: Optional[MqttPublisher] = None
+        try:
+            mqtt_config = MqttConfig.from_env(client_id_prefix="rack")
+            candidate_publisher = MqttPublisher(config=mqtt_config, rig_id=rig_id)
+            if candidate_publisher.connect():
+                mqtt_publisher = candidate_publisher
+                logger.info("MQTT publisher initialized — live telemetry enabled")
+            else:
+                logger.warning("MQTT publisher unavailable — live telemetry disabled")
+        except Exception as e:
+            logger.warning(f"MQTT publisher unavailable — live telemetry disabled: {e}")
+            mqtt_publisher = None
+        
+        # Initialize telemetry manager (pure measure → MQTT publish loop;
+        # all Postgres persistence is handled by guppi-agent's MqttIngestWorker)
         telemetry_manager = TelemetryManager(
             rig_config=rig_config,
-            db_connection_pool=db_connection_pool,
             measurement_interval=measurement_interval,
-            batch_size=batch_size,
-            queue_maxsize=queue_maxsize,
-            queue_behavior=queue_behavior,
-            table_name=table_name,
-            get_should_save_data=lambda: (
-                save_policy.manual_mode
-                or (
-                    save_policy.test_executor is not None
-                    and save_policy.test_executor.is_executing()
-                )
-            ),
             get_test_id=lambda: (
                 (save_policy.test_executor.get_current_execution() or {}).get("execution_id")
                 if save_policy.test_executor is not None
                 and save_policy.test_executor.is_executing()
                 else None
             ),
+            mqtt_publisher=mqtt_publisher,
         )
         
         # Start telemetry collection
@@ -119,6 +119,10 @@ def create_app(
         if telemetry_manager is not None:
             telemetry_manager.stop()
             telemetry_manager = None
+        
+        # Disconnect MQTT publisher
+        if mqtt_publisher is not None:
+            mqtt_publisher.disconnect()
         
         # Test executor cleanup (if needed)
         test_executor = None
@@ -155,7 +159,7 @@ def create_app(
     register_test_endpoints(app, None)  # Executor will be available via app.state
     
     # Initialize instrument registry in app state
-    app.state.instruments: dict[str, dict[str, Any]] = {}
+    app.state.instruments: Dict[str, Dict[str, Any]] = {}
     instruments_list = rig_config.get("instruments", [])
     for inst in instruments_list:
         instrument_id = inst.get("id")
@@ -188,22 +192,16 @@ def create_app(
     @app.get("/health")
     async def health():
         """Health check endpoint."""
-        telemetry_running = False
+        measurement_running = False
         if telemetry_manager is not None:
-            # Check if threads are running
             measurement_running = (
                 telemetry_manager._measurement_thread is not None
                 and telemetry_manager._measurement_thread.is_alive()
-            )
-            uploader_running = (
-                telemetry_manager._uploader_thread is not None
-                and telemetry_manager._uploader_thread.is_alive()
             )
         
         return {
             "status": "healthy",
             "measurement_running": measurement_running,
-            "uploader_running": uploader_running,
         }
     
     @app.get("/telemetry/stats")
@@ -217,6 +215,22 @@ def create_app(
         
         stats = telemetry_manager.get_stats()
         return stats
+    
+    @app.get("/telemetry/latest")
+    async def get_telemetry_latest():
+        """Get the latest measured values for all signals — directly from memory.
+        
+        This bypasses Supabase entirely. The frontend can poll this endpoint
+        at high frequency (e.g. every 200ms) for near-real-time widget updates.
+        """
+        if telemetry_manager is None:
+            return JSONResponse(
+                status_code=503,
+                content={"error": "Telemetry manager not initialized"}
+            )
+        
+        with telemetry_manager._latest_values_lock:
+            return telemetry_manager._latest_values
     
     @app.post("/telemetry/start")
     async def start_telemetry():
@@ -368,4 +382,3 @@ def create_app(
     test_executor_instance = None
     
     return app
-

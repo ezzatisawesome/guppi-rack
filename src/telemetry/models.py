@@ -7,7 +7,7 @@ instrument types without a fixed column schema.
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 
 @dataclass
@@ -59,7 +59,7 @@ class Measurement:
     unit: str
     execution_id: Optional[str] = None
     
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         """Convert measurement to dictionary for database insertion."""
         return {
             "recorded_at": self.recorded_at.isoformat(),
