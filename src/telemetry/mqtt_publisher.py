@@ -91,6 +91,7 @@ class MqttPublisher:
         """
         with self._lock:
             if not self._client or not self._connected:
+                logger.debug(f"MQTT not connected, skipping telemetry for {instrument_id}/{metric}")
                 return
 
             topic = self._topic(self.rig_id, instrument_id, metric)
@@ -98,6 +99,7 @@ class MqttPublisher:
 
             try:
                 self._client.publish(topic, payload=payload, qos=0, retain=True)
+                logger.debug(f"Published telemetry: {topic} = {payload}")
             except Exception as e:
                 logger.error(f"MQTT publish failed for {topic}: {e}")
 
